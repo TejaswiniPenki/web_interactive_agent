@@ -1,7 +1,7 @@
 # app.py
 import streamlit as st
 import os
-from langgraph import StateGraph, END
+from langgraph.graph import StateGraph, END
 from playwright.async_api import async_playwright
 import requests
 import asyncio
