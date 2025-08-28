@@ -15,7 +15,7 @@ if not api_key:
 
 # Instantiate the LangChain Gemini model once
 llm = ChatGoogleGenerativeAI(
-    model="gemini-pro",
+    model="gemini-2.0-flash",
     temperature=0.3,
     google_api_key=api_key,
     convert_system_message_to_human=True
