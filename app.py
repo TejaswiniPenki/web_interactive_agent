@@ -7,7 +7,10 @@ import requests
 import asyncio
 
 # --- CONFIGURATION ---
-GOOGLE_AI_API_KEY = st.secrets["GOOGLE_AI_API_KEY"]  # Store this in Streamlit Cloud's secrets
+GOOGLE_AI_API_KEY = st.secrets.get("GOOGLE_AI_API_KEY")
+if not GOOGLE_AI_API_KEY:
+    st.error("API key not found in secrets. Please add GOOGLE_AI_API_KEY in Streamlit secrets.")
+    st.stop()
 AI_STUDIO_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
 
 # --- WEB INTERACTION TOOL WITH PLAYWRIGHT ---
@@ -26,21 +29,45 @@ async def interact_with_page(url, action):
         await browser.close()
     return content
 
-# --- LLM NODE USING GOOGLE AI STUDIO (GEMINI) ---
+# --- LLM NODE USING GOOGLE AI STUDIO (GEMINI) WITH ERROR HANDLING ---
 def ask_llm(question):
-    headers = {"Authorization": f"Bearer {GOOGLE_AI_API_KEY}"}
+    headers = {
+        "Authorization": f"Bearer {GOOGLE_AI_API_KEY}",
+        "Content-Type": "application/json"
+    }
     data = {
         "contents": [{
             "parts": [{"text": question}]
         }],
         "generationConfig": {"maxOutputTokens": 512}
     }
-    response = requests.post(AI_STUDIO_URL, headers=headers, json=data)
+
     try:
-        result = response.json()["candidates"]["content"]["parts"]["text"]
-    except Exception:
-        result = "Error or unexpected response from API"
-    return result
+        response = requests.post(AI_STUDIO_URL, headers=headers, json=data)
+        response.raise_for_status()  # Raise error for bad status
+
+        result = response.json()
+        if "error" in result:
+            error_msg = result["error"].get("message", "Unknown error from API")
+            print(f"API returned error: {error_msg}")
+            return f"API error: {error_msg}"
+
+        # Extract generated text from response safely
+        try:
+            return result["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError):
+            print(f"Unexpected response format: {result}")
+            return "API response format error"
+
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP error occurred: {http_err} - Response: {response.text}")
+        return f"HTTP error: {http_err}"
+    except requests.exceptions.RequestException as req_err:
+        print(f"Request error occurred: {req_err}")
+        return f"Request error: {req_err}"
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        return "An unexpected error occurred while calling the API"
 
 # --- DEFINE LANGGRAPH STATE & WORKFLOW ---
 class ChatState(dict):
