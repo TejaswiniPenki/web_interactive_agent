@@ -1,91 +1,75 @@
-# app.py
 import streamlit as st
-import os
-from langgraph.graph import StateGraph, END
-from playwright.async_api import async_playwright
 import asyncio
+import os
 
+from playwright.async_api import async_playwright
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-# --- CONFIGURATION ---
-api_key = st.secrets.get("GOOGLE_AI_API_KEY")
-if not api_key:
-    st.error("Google API key missing in secrets!")
+# Automatically install browser binaries at runtime (critical for Streamlit Cloud)
+if not os.path.exists("/home/appuser/.cache/ms-playwright"):
+    os.system("playwright install chromium")
+
+GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY")
+if not GOOGLE_API_KEY:
+    st.error("Missing Gemini API key in secrets!")
     st.stop()
 
-# Instantiate the LangChain Gemini model once
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.0-flash",
-    temperature=0.3,
-    google_api_key=api_key,
-    convert_system_message_to_human=True
+    google_api_key=GOOGLE_API_KEY,
+    temperature=0.2
 )
 
-# --- WEB INTERACTION TOOL WITH PLAYWRIGHT ---
-async def interact_with_page(url, action):
+st.title("💡 Robust Web-Interacting Agent")
+
+st.info("Paste any URL below. Optionally provide login credentials, take screenshots, and let Gemini AI summarize the content.")
+
+url = st.text_input("Website URL", "")
+username = st.text_input("Username (optional)", "")
+password = st.text_input("Password (optional)", "", type="password")
+take_screenshot = st.checkbox("Take Screenshot after login", value=True)
+question = st.text_area("Ask Gemini AI about page (optional)", "")
+
+submit = st.button("Run Agent")
+
+async def automate_web(url, username, password, screenshot_path="page.png"):
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
-        context = await browser.new_context()
-        page = await context.new_page()
-        await page.goto(url)
-        if action == "get_title":
-            content = await page.title()
-        elif action == "get_headers":
-            content = await page.evaluate("() => Array.from(document.querySelectorAll('h1,h2,h3')).map(el => el.innerText)")
-        else:
-            content = "Action not supported."
+        page = await browser.new_page()
+        await page.goto(url, timeout=60000)
+        if username and password:
+            try:
+                await page.fill('input[type="text"], input[name*="user"], input[name*="email"]', username)
+                await page.fill('input[type="password"]', password)
+                await page.click('button[type="submit"], input[type="submit"]')
+                await page.wait_for_load_state("networkidle")
+            except Exception as e:
+                st.warning("Login fields not found or login failed. Check site selectors or credentials.")
+        screenshot = None
+        if take_screenshot:
+            await page.screenshot(path=screenshot_path)
+            screenshot = screenshot_path
+        content = await page.content()
         await browser.close()
-    return content
+    return content, screenshot
 
-# --- LLM NODE USING LANGCHAIN GOOGLE GEMINI ---
-def ask_llm(question):
-    try:
-        # Using LangChain llm.invoke API for chat completion
-        result = llm.invoke(question)
-        return result.content
-    except Exception as e:
-        return f"Error or unexpected response from API: {e}"
+if submit and url:
+    with st.spinner("Agent working..."):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        page_content, screenshot_path = loop.run_until_complete(
+            automate_web(url, username, password)
+        )
+        st.success("Web automation complete!")
+        if screenshot_path:
+            st.image(screenshot_path, caption="Screenshot of Page")
+        if question:
+            prompt = f"{question}\n\nPage HTML:\n{page_content[:5000]}..."
+            ai_response = llm.invoke(prompt)
+            st.markdown("### Gemini AI Output")
+            st.write(ai_response.content)
+        else:
+            st.markdown("### Page HTML snippet:")
+            st.code(page_content[:2000])
 
-# --- DEFINE LANGGRAPH STATE & WORKFLOW ---
-class ChatState(dict):
-    pass
-
-async def agent_node(state: ChatState):
-    query = state["user_input"]
-    url = state.get("target_url", "")
-    action = state.get("action", "")
-    if url and action:
-        content = await interact_with_page(url, action)
-        question = f"{query}\nWeb page data: {content}"
-    else:
-        question = query
-    response = ask_llm(question)
-    return {"message": response, "action": "continue"}
-
-def check_exit(state: ChatState):
-    if "exit" in state.get("user_input", "").lower():
-        return END
-    return agent_node
-
-# --- MAIN STREAMLIT UI ---
-def run_ui():
-    st.title("Web-Interacting AI Agent")
-    st.info("Enter a question and, optionally, a URL + action. The agent will reason and use the web!")
-
-    user_input = st.text_area("Your Question", "")
-    target_url = st.text_input("Target URL (optional)", "")
-    action = st.selectbox("Web Action (optional)", ["get_title", "get_headers", "none"], index=2)
-    submit = st.button("Run Agent")
-
-    if submit and user_input:
-        state = ChatState(user_input=user_input, target_url=target_url, action=action if action != "none" else "")
-        # Run LangGraph stateful workflow with asyncio
-        async def workflow():
-            response = await agent_node(state)
-            return response["message"]
-        message = asyncio.run(workflow())
-        st.write("**Agent Response:**")
-        st.success(message)
-
-if __name__ == "__main__":
-    run_ui()
+# This setup has no local dependency. Directly push repo. Streamlit Cloud will install everything.
