@@ -1,6 +1,4 @@
 streamlit
 playwright
-langgraph
-requests
 langchain-google-genai
-
+google-generativeai
